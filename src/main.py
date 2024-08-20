@@ -21,7 +21,9 @@ def whats_new(session):
     soup = BeautifulSoup(response.text, features='lxml')
     main_div = find_tag(soup, 'section', attrs={'id': 'what-s-new-in-python'})
     div_with_ul = find_tag(main_div, 'div', attrs={'class': 'toctree-wrapper'})
-    sections_by_python = div_with_ul.find_all('li', attrs={'class': 'toctree-l1'})
+    sections_by_python = div_with_ul.find_all(
+        'li', attrs={'class': 'toctree-l1'}
+    )
     results = [('Ссылка на статью', 'Заголовок', 'Редактор, автор')]
     for section in tqdm(sections_by_python):
         version_a_tag = find_tag(section, 'a')
@@ -58,10 +60,10 @@ def latest_versions(session):
     for a_tag in a_tags:
         link = a_tag['href']
         text_match = re.search(pattern, a_tag.text)
-        if text_match is not None:  
+        if text_match is not None:
             version, status = text_match.groups()
-        else:  
-            version, status = a_tag.text, ''  
+        else:
+            version, status = a_tag.text, ''
         results.append(
             (link, version, status)
         )
@@ -75,14 +77,14 @@ def download(session):
         return
     soup = BeautifulSoup(response.text, features='lxml')
     main_tag = soup.find('div', {'role': 'main'})
-    table_tag = main_tag.find('table', {'class': 'docutils'}) 
-    pdf_a4_tag = table_tag.find('a', {'href': re.compile(r'.+pdf-a4\.zip$')}) 
+    table_tag = main_tag.find('table', {'class': 'docutils'})
+    pdf_a4_tag = table_tag.find('a', {'href': re.compile(r'.+pdf-a4\.zip$')})
     pdf_a4_link = pdf_a4_tag['href']
     archive_url = urljoin(downloads_url, pdf_a4_link)
-    filename = archive_url.split('/')[-1] 
+    filename = archive_url.split('/')[-1]
     downloads_dir = BASE_DIR / 'downloads'
     downloads_dir.mkdir(exist_ok=True)
-    archive_path = downloads_dir / filename 
+    archive_path = downloads_dir / filename
     response = session.get(archive_url)
     with open(archive_path, 'wb') as file:
         file.write(response.content)
@@ -102,53 +104,74 @@ def get_pep_page_status(session, pep_link):
 
 def pep(session):
     response = get_response(session, PEP_URL)
-    if response is None:
+    if not response:
         return None
     soup = BeautifulSoup(response.text, 'lxml')
     tables = soup.find_all('table')
+    status_counts, total_peps, miss_statuses = process_pep_tables(
+        tables, session
+    )
+    log_miss_statuses(miss_statuses)
+    save_status_summary(status_counts, total_peps)
+    return status_counts
+
+
+def process_pep_tables(tables, session):
     status_counts = {}
     total_peps = 0
     miss_statuses = []
     for table in tables:
         rows = table.find_all('tr')[1:]
         for row in tqdm(rows):
-            columns = row.find_all('td')
-            if len(columns) < 3:
-                continue
-            if str(columns[0]) != '<td></td>':
-                link_element = find_tag(columns[1], 'a')
-                expected_status = find_tag(columns[0], 'abbr')
-                split_status = expected_status['title'].split(", ")
-            if link_element:
-                pep_link = urljoin(PEP_URL, link_element['href'])
-                actual_status = get_pep_page_status(session, pep_link)
-                if actual_status and actual_status != split_status[1]:
-                    miss_statuses.append({
-                        'link': pep_link,
-                        'actual_status': actual_status,
-                        'expected_status': split_status[1]
-                    })
-                if actual_status:
-                    for key, statuses in EXPECTED_STATUS.items():
-                        if actual_status in statuses:
-                            if actual_status in status_counts:
-                                status_counts[actual_status] += 1
-                            else:
-                                status_counts[actual_status] = 1
-                            total_peps += 1
-                            break
+            process_pep_row(row, session, status_counts, miss_statuses)
+            total_peps += 1
+    return status_counts, total_peps, miss_statuses
+
+
+def process_pep_row(row, session, status_counts, miss_statuses):
+    columns = row.find_all('td')
+    if len(columns) < 3 or str(columns[0]) == '<td></td>':
+        return
+    link_element = find_tag(columns[1], 'a')
+    expected_status = find_tag(columns[0], 'abbr')
+    if not link_element or not expected_status:
+        return
+    pep_link = urljoin(PEP_URL, link_element['href'])
+    actual_status = get_pep_page_status(session, pep_link)
+    expected_status_title = expected_status['title'].split(", ")[1]
+    if actual_status and actual_status != expected_status_title:
+        miss_statuses.append({
+            'link': pep_link,
+            'actual_status': actual_status,
+            'expected_status': expected_status_title
+        })
+    update_status_counts(actual_status, status_counts)
+
+
+def update_status_counts(actual_status, status_counts):
+    for key, statuses in EXPECTED_STATUS.items():
+        if actual_status in statuses:
+            status_counts[actual_status] = status_counts.get(
+                actual_status, 0) + 1
+            break
+
+
+def log_miss_statuses(miss_statuses):
     if miss_statuses:
         logging.info('Несовпадающие статусы:')
         for status in miss_statuses:
             logging.info(
                 f"{status['link']}\n"
                 f"Статус в карточке: {status['actual_status']}\n"
-                f"Ожидаемые статусы: ['{status['expected_status']}']"
+                f"Ожидаемый статус: {status['expected_status']}"
             )
+
+
+def save_status_summary(status_counts, total_peps):
     results_dir = BASE_DIR / 'results'
     results_dir.mkdir(exist_ok=True)
     with open(
-        BASE_DIR / 'results/pep_status.csv', 'w', newline='', encoding='utf-8'
+        results_dir / 'pep_status.csv', 'w', newline='', encoding='utf-8'
     ) as csvfile:
         writer = csv.writer(csvfile)
         writer.writerow(['Статус', 'Количество'])
@@ -158,7 +181,6 @@ def pep(session):
     logging.info(f'Общее количество PEP: {total_peps}')
     for status, count in status_counts.items():
         logging.info(f'{status}: {count}')
-    return status_counts
 
 
 MODE_TO_FUNCTION = {
@@ -182,7 +204,7 @@ def main():
     results = MODE_TO_FUNCTION[parser_mode](session)
     if results is not None:
         control_output(results, args)
-    logging.info('Парсер завершил работу.') 
+    logging.info('Парсер завершил работу.')
 
 
 if __name__ == '__main__':

@@ -19,7 +19,7 @@ def control_output(results, cli_args):
 
 def default_output(results):
     for row in results:
-        print(*row)    
+        print(*row)
 
 
 def pretty_output(results):
@@ -27,7 +27,7 @@ def pretty_output(results):
     table.field_names = results[0]
     table.align = 'l'
     table.add_rows(results[1:])
-    print(table) 
+    print(table)
 
 
 def file_output(results, cli_args):
@@ -41,4 +41,4 @@ def file_output(results, cli_args):
     with open(file_path, 'w', encoding='utf-8') as f:
         writer = csv.writer(f, dialect='unix')
         writer.writerows(results)
-    logging.info(f'Файл с результатами был сохранён: {file_path}') 
+    logging.info(f'Файл с результатами был сохранён: {file_path}')
