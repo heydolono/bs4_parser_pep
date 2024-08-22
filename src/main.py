@@ -11,14 +11,20 @@ from configs import configure_argument_parser, configure_logging
 from constants import BASE_DIR, EXPECTED_STATUS, MAIN_DOC_URL, PEP_URL
 from outputs import control_output
 from utils import find_tag, get_response
+from exceptions import ResponseError, VersionsNotFoundError
+
+
+def response_soup(session, new_url):
+    response = get_response(session, new_url)
+    if response is None:
+        raise ResponseError(new_url)
+    soup = BeautifulSoup(response.text, features='lxml')
+    return soup
 
 
 def whats_new(session):
     whats_new_url = urljoin(MAIN_DOC_URL, 'whatsnew/')
-    response = get_response(session, whats_new_url)
-    if response is None:
-        return
-    soup = BeautifulSoup(response.text, features='lxml')
+    soup = response_soup(session, whats_new_url)
     main_div = find_tag(soup, 'section', attrs={'id': 'what-s-new-in-python'})
     div_with_ul = find_tag(main_div, 'div', attrs={'class': 'toctree-wrapper'})
     sections_by_python = div_with_ul.find_all(
@@ -43,10 +49,7 @@ def whats_new(session):
 
 
 def latest_versions(session):
-    response = get_response(session, MAIN_DOC_URL)
-    if response is None:
-        return
-    soup = BeautifulSoup(response.text, 'lxml')
+    soup = response_soup(session, MAIN_DOC_URL)
     sidebar = soup.find('div', {'class': 'sphinxsidebarwrapper'})
     ul_tags = sidebar.find_all('ul')
     for ul in ul_tags:
@@ -54,7 +57,7 @@ def latest_versions(session):
             a_tags = ul.find_all('a')
             break
     else:
-        raise Exception('Ничего не нашлось')
+        raise VersionsNotFoundError()
     results = [('Ссылка на документацию', 'Версия', 'Статус')]
     pattern = r'Python (?P<version>\d\.\d+) \((?P<status>.*)\)'
     for a_tag in a_tags:
@@ -72,10 +75,7 @@ def latest_versions(session):
 
 def download(session):
     downloads_url = urljoin(MAIN_DOC_URL, 'download.html')
-    response = get_response(session, downloads_url)
-    if response is None:
-        return
-    soup = BeautifulSoup(response.text, features='lxml')
+    soup = response_soup(session, downloads_url)
     main_tag = soup.find('div', {'role': 'main'})
     table_tag = main_tag.find('table', {'class': 'docutils'})
     pdf_a4_tag = table_tag.find('a', {'href': re.compile(r'.+pdf-a4\.zip$')})
@@ -103,10 +103,7 @@ def get_pep_page_status(session, pep_link):
 
 
 def pep(session):
-    response = get_response(session, PEP_URL)
-    if not response:
-        return None
-    soup = BeautifulSoup(response.text, 'lxml')
+    soup = response_soup(session, PEP_URL)
     tables = soup.find_all('table')
     status_counts, total_peps, miss_statuses = process_pep_tables(
         tables, session
